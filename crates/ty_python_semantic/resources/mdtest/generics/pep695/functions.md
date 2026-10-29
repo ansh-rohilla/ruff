@@ -819,6 +819,23 @@ def _(sink: Intersection[Sink[A], Sink[B]]) -> None:
     reveal_type(element(sink))  # revealed: A & B
 ```
 
+If multiple distinct alternatives are valid but their intersection is not, the compatible return
+types are unioned:
+
+```py
+from collections.abc import Sequence
+
+def make_list[T](sink: Sink[list[T]]) -> list[T]:
+    return []
+
+def _(sink: Intersection[Sink[list[A]], Sink[list[B]], Sink[list[C]]]) -> None:
+    inferred = make_list(sink)
+    reveal_type(inferred)  # revealed: list[A] | list[B] | list[C]
+
+    result: Sequence[A | B] = make_list(sink)
+    reveal_type(result)  # revealed: list[A] | list[B]
+```
+
 Assignments to different type variables remain correlated within an alternative: the choices here
 are `(T = A, U = B)` and `(T = B, U = C)`. The contravariant `Sink[A]` selects the first pair, so
 the result is `B`:
@@ -1339,9 +1356,14 @@ def correlated[T](x: Source[T], y: Source[T]) -> T:
     raise NotImplementedError
 
 def _(x: Intersection[Source[A], Source[B]], other: Any) -> None:
-    assert isinstance(other, DSource)
-    # TODO: revealed: (A & B) | (Any & D)
-    reveal_type(correlated(x, other))  # revealed: (A & B) | D
+    if isinstance(other, DSource):
+        # TODO: revealed: (A & B) | (Any & D)
+        reveal_type(correlated(x, other))  # revealed: (A & B) | D
+
+    reveal_type(correlated(x, other))  # revealed: A | B
+
+    result: B = correlated(x, other)
+    reveal_type(result)  # revealed: B
 ```
 
 A gradual component in the return annotation is preserved in both specialized return types:
@@ -1405,6 +1427,7 @@ a subtype of all others, we select that one.)
 ### Mutable returns from intersection arguments
 
 ```py
+from collections.abc import Sequence
 from ty_extensions import Intersection
 
 class Source[T]:
@@ -1422,6 +1445,10 @@ def _(source: Intersection[Source[A], Source[B]]) -> None:
     # the argument also fits `Source[A | B]`. Inference uses `T = A | B`, producing `list[A | B]`
     # instead of intersecting `list[A]` and `list[B]`.
     reveal_type(make_list(source))  # revealed: list[A | B]
+
+    # Only `T = B` is assignable to the declared type.
+    result: Sequence[B] = make_list(source)
+    reveal_type(result)  # revealed: list[B]
 ```
 
 The same applies when an alias hides the mutable result:
@@ -1508,6 +1535,9 @@ def make_list[T](sink: Sink[T]) -> list[T]:
 
 def _(sink: Intersection[ASink, BSink]) -> None:
     reveal_type(make_list(sink))  # revealed: list[A] | list[B]
+
+    result: list[A] | list[B] = make_list(sink)
+    reveal_type(result)  # revealed: list[A] | list[B]
 ```
 
 Evidence from another argument can leave only one valid specialization. A supplied value of type `A`
