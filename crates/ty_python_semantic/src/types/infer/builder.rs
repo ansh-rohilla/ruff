@@ -54,8 +54,8 @@ use crate::types::abstract_methods::AbstractMethods;
 use crate::types::add_inferred_python_version_hint_to_diagnostic;
 use crate::types::attribute_write::{AssignmentAttributeMembers, assignment_attribute_members};
 use crate::types::call::bind::{
-    ArgumentTypeContext, CallableDescription, CheckTypesMode, OverloadSet,
-    inferable_typevar_occurrences, requires_overload_evaluation,
+    ArgumentContextSpecialization, ArgumentTypeContext, CallableDescription, CheckTypesMode,
+    OverloadSet, inferable_typevar_occurrences, requires_overload_evaluation,
 };
 use crate::types::call::{Binding, Bindings, CallArguments, CallError, CallErrorKind};
 use crate::types::callable::CallableTypeKind;
@@ -6042,7 +6042,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             };
 
-        let mut try_narrow = |narrowed_ty: Type<'db>| {
+        let mut try_narrow = |target_ty: Type<'db>| {
+            // Preserve results that were already inferred directly in a previous round of iteration,
+            // even if they aren't strictly compatible with a single member of the union, to avoid
+            // unnecessary narrowing.
+            let compatible_ty = if call_expression_tcx.is_inferred() {
+                call_expression_tcx.declared_type()?
+            } else {
+                target_ty
+            };
+
             // Short-circuit if there is no overload with a matching return type.
             if !bindings.satisfies(|overload| {
                 let inferable = overload
@@ -6053,35 +6062,35 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 !overload
                     .return_ty
-                    .when_assignable_to(db, env, narrowed_ty, &constraints, inferable)
+                    .when_assignable_to(db, env, compatible_ty, &constraints, inferable)
                     .is_never_satisfied(db, env, inferable)
             }) {
                 return None;
             }
 
-            let narrowed_tcx = call_expression_tcx.with_declared_type(Some(narrowed_ty));
+            let target_tcx = call_expression_tcx.with_declared_type(Some(target_ty));
 
             let mut speculative_bindings = bindings.clone();
             let mut speculative_builder = self.speculate();
             let mut speculative_argument_types = initial_argument_types.clone();
 
-            // Attempt to infer the argument types using the narrowed type context.
+            // Attempt to infer the argument types using the target type context.
             infer_and_check_argument_types(
                 &mut speculative_builder,
                 &mut speculative_argument_types,
                 &mut speculative_bindings,
-                narrowed_tcx,
+                target_tcx,
             )
             .ok()?;
 
             if !speculative_bindings
                 .return_type(db, env)
-                .is_assignable_to(db, env, narrowed_ty)
+                .is_assignable_to(db, env, compatible_ty)
             {
                 return None;
             }
 
-            // Successfully inferred a result compatible with the declared union.
+            // Successfully inferred a result compatible with the type context.
             Some((
                 speculative_bindings,
                 speculative_argument_types,
@@ -6409,10 +6418,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         constraints: &ConstraintSetBuilder<'db>,
         call_expression_tcx: TypeContext<'db>,
     ) -> Vec<Option<MatchingArgumentTypeContext<'db>>> {
+        type CachedSpecialization<'db> =
+            OnceCell<Option<Cow<'db, ArgumentContextSpecialization<'db>>>>;
         type OverloadsWithBinding<'a, 'db> = Vec<(
             &'a Binding<'db>,
             &'a CallableBinding<'db>,
-            OnceCell<Option<Specialization<'db>>>,
+            CachedSpecialization<'db>,
         )>;
 
         fn add_overloads_from_binding<'a, 'db>(
@@ -6456,7 +6467,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let parameter_tcx =
                     |overload: &Binding<'db>,
                      binding: &CallableBinding<'db>,
-                     specialization: &OnceCell<Option<Specialization<'db>>>| {
+                     specialization: &CachedSpecialization<'db>| {
                         overload.argument_type_context(
                             db,
                             env,
@@ -6466,14 +6477,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             argument_index,
                             call_expression_tcx,
                             || {
-                                *specialization.get_or_init(|| {
-                                    overload.argument_type_context_specialization(
-                                        db,
-                                        env,
-                                        constraints,
-                                        call_expression_tcx,
-                                    )
-                                })
+                                specialization
+                                    .get_or_init(|| {
+                                        overload.argument_type_context_specialization(
+                                            db,
+                                            env,
+                                            constraints,
+                                            call_expression_tcx,
+                                        )
+                                    })
+                                    .as_deref()
                             },
                         )
                     };
