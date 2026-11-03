@@ -1999,6 +1999,14 @@ def _(ints: list[int]):
     reveal_type(x2)  # revealed: list[str] | list[int]
 ```
 
+Dynamic types inferred from arguments are also preserved.
+
+```py
+def _(values: list[Any]):
+    x = choose(head_or(list(values), default=None), None)
+    reveal_type(x)  # revealed: Any | None
+```
+
 A nested generic call still participates in narrowing if inferred against an explicit declared type.
 
 ```py

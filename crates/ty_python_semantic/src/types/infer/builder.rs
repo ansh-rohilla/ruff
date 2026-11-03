@@ -6100,8 +6100,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let mut narrowed = narrow_targets
             .iter()
-            // Only attempt narrowing to concrete types.
-            .filter(|ty| !ty.is_dynamic())
+            // Skip dynamic members, unless they were already inferred directly in a previous round of
+            // fixpoint iteration.
+            .filter(|ty| call_expression_tcx.is_inferred() || !ty.is_dynamic())
             // Avoid expanding a very large union of literals.
             .filter(|ty| !should_group_literals || !is_concrete_literal(ty))
             .filter_map(|ty| try_narrow(*ty))
