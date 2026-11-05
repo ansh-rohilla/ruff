@@ -1,20 +1,19 @@
-use toml::de::{DeTable, DeValue};
+use toml::Spanned;
+use toml::de::{DeArray, DeTable, DeValue};
 
 use ruff_python_ast::TomlSourceType;
+use ruff_text_size::{TextRange, TextSize};
 
 use crate::checkers::ast::LintContext;
+use crate::codes::Rule;
 use crate::preview::is_human_readable_names_enabled;
-use crate::rules::ruff::rules::rule_codes_in_selectors;
+use crate::rules::ruff::rules::{redirected_rule_selector, rule_codes_in_selectors};
 
 pub(super) fn check_rule_selectors(
     context: &LintContext,
     document: &DeTable<'_>,
     source_type: TomlSourceType,
 ) {
-    if !is_human_readable_names_enabled(context.settings().preview) {
-        return;
-    }
-
     let ruff = match source_type {
         TomlSourceType::Pyproject => document
             .get("tool")
@@ -71,7 +70,7 @@ fn check_selectors(context: &LintContext, table: &DeTable<'_>, in_lint_table: bo
         };
 
         if let DeValue::Array(values) = value.get_ref() {
-            rule_codes_in_selectors(context, values, selector, in_lint_table);
+            check_selector_array(context, values, selector, in_lint_table);
         }
     }
 
@@ -85,8 +84,49 @@ fn check_selectors(context: &LintContext, table: &DeTable<'_>, in_lint_table: bo
                 let Some(values) = value.get_ref().as_array() else {
                     continue;
                 };
-                rule_codes_in_selectors(context, values, selector, in_lint_table);
+                check_selector_array(context, values, selector, in_lint_table);
             }
         }
     }
+}
+
+fn check_selector_array(
+    context: &LintContext,
+    values: &DeArray<'_>,
+    setting: &'static str,
+    in_lint_table: bool,
+) {
+    let source = context.source_file().source_text();
+
+    for value in values {
+        let Some((selector, range)) = selector_string(value, source) else {
+            continue;
+        };
+        if context.is_rule_enabled(Rule::RedirectedRuleSelector) {
+            redirected_rule_selector(context, selector, range, setting, in_lint_table);
+        }
+        if context.is_rule_enabled(Rule::RuleCodesInSelectors)
+            && is_human_readable_names_enabled(context.settings().preview)
+        {
+            rule_codes_in_selectors(context, selector, range, setting, in_lint_table);
+        }
+    }
+}
+
+/// Use the decoded selector for lookup, but replace the source text between the TOML quotes.
+fn selector_string<'a>(
+    value: &'a Spanned<DeValue<'_>>,
+    source: &str,
+) -> Option<(&'a str, TextRange)> {
+    let selector = value.get_ref().as_str()?;
+    let span = value.span();
+    let raw = &source[span.clone()];
+    let quotes = if raw.starts_with("\"\"\"") || raw.starts_with("'''") {
+        3
+    } else {
+        1
+    };
+    let start = TextSize::try_from(span.start + quotes).ok()?;
+    let end = TextSize::try_from(span.end - quotes).ok()?;
+    Some((selector, TextRange::new(start, end)))
 }

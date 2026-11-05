@@ -5464,3 +5464,25 @@ fn ruff_toml_is_linted() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn fix_redirected_selectors_with_rule_names() -> Result<()> {
+    let test = CliTest::new()?;
+
+    assert_cmd_snapshot!(
+        test.check_command()
+            .args(["--isolated", "--preview", "--select", "RUF201,RUF202"])
+            .args(["--fix", "--stdin-filename", "ruff.toml", "-"])
+            .pass_stdin(r#"lint.select = ["TCH002", "TCH"]"#),
+        @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    lint.select = ["typing-only-third-party-import", "TC"]
+    ----- stderr -----
+    Found 3 errors (3 fixed, 0 remaining).
+    "#
+    );
+
+    Ok(())
+}
