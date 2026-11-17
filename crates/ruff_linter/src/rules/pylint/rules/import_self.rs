@@ -1,4 +1,4 @@
-use ruff_python_ast::Alias;
+use ruff_python_ast::{Alias, Stmt};
 
 use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::helpers::resolve_imported_module_path;
@@ -56,6 +56,7 @@ pub(crate) fn import_self(checker: &Checker, alias: &Alias, module_path: Option<
 /// PLW0406
 pub(crate) fn import_from_self(
     checker: &Checker,
+    stmt: &Stmt,
     level: u32,
     module: Option<&str>,
     names: &[Alias],
@@ -69,20 +70,23 @@ pub(crate) fn import_from_self(
         return;
     };
 
-    if imported_module_path
-        .split('.')
-        .eq(&module_path[..module_path.len() - 1])
-    {
-        if let Some(alias) = names
-            .iter()
-            .find(|alias| alias.name == module_path[module_path.len() - 1])
-        {
-            checker.report_diagnostic(
-                ImportSelf {
-                    name: format!("{}.{}", imported_module_path, alias.name),
-                },
-                alias.range(),
-            );
+    if imported_module_path.split('.').eq(module_path) {
+        checker.report_diagnostic(
+            ImportSelf {
+                name: imported_module_path.to_string(),
+            },
+            stmt.range(),
+        );
+    } else if let Some((last, parent)) = module_path.split_last() {
+        if imported_module_path.split('.').eq(parent) {
+            if let Some(alias) = names.iter().find(|alias| alias.name == *last) {
+                checker.report_diagnostic(
+                    ImportSelf {
+                        name: format!("{imported_module_path}.{}", alias.name),
+                    },
+                    alias.range(),
+                );
+            }
         }
     }
 }
